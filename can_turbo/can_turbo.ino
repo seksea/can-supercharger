@@ -3,16 +3,15 @@
 
 MCP2515 CANController(10); // Create CANController using 10th digital pin as CS
 
+bool safetyLimitReached = false;
+
 void setup() {
   /* Initialise serial */
   Serial.begin(9600);
-  Serial.println("Initialised serial");
   /* Initialise mcp2515 CAN */
-  Serial.println("Initialising CANController");
   CANController.reset();
   CANController.setBitrate(CAN_500KBPS, MCP_8MHZ);
   CANController.setNormalMode();
-  Serial.println("Initialised CANController");
 }
 
 void sendCANMsg(int rpm) {
@@ -31,15 +30,18 @@ void sendCANMsg(int rpm) {
   escMsg.data[6] = rpm; // ESCSpeedRequest
   escMsg.data[7] = 0; // ESCSpeedRequest 2
   CANController.sendMessage(&escMsg);
-  Serial.print("rpm:");
-  Serial.println(rpm);
   
   can_frame pmzMsg;
   pmzMsg.can_id = 417; // PMZ can id
   pmzMsg.can_dlc = 8;
   pmzMsg.data[0] = 0;
   pmzMsg.data[1] = 0;
-  pmzMsg.data[2] = (rpm == 0) ? 0 : 56; // desired PowerMode * 8
+  if (safetyLimitReached) {
+  pmzMsg.data[2] = 0; // desired PowerMode * 8
+  }
+  else {  
+    pmzMsg.data[2] = (rpm == 0) ? 0 : 56; // desired PowerMode * 8
+  }
   pmzMsg.data[3] = 0;
   pmzMsg.data[4] = 0;
   pmzMsg.data[5] = 0;
@@ -48,24 +50,23 @@ void sendCANMsg(int rpm) {
   CANController.sendMessage(&pmzMsg);  
 }
 
-logCANMessages() {
+void logCANMessages() {
+  can_frame CANMsg;
   if (CANController.readMessage(&CANMsg) == MCP2515::ERROR_OK) {
-    Serial.print("CAN message recieved!\nID: ");
-    Serial.println(CANMsg.can_id); //id of where the message came from
-    Serial.print("LENGTH: ");
-    Serial.println(CANMsg.can_dlc); //length of message in bytes
-    // get first 8 bytes for testing (would do for loop over length from start point of message wanted in future)
-    Serial.println(CANMsg.data[0]); 
-    Serial.println(CANMsg.data[1]);
-    Serial.println(CANMsg.data[2]);
-    Serial.println(CANMsg.data[3]);
-    Serial.println(CANMsg.data[4]);
-    Serial.println(CANMsg.data[5]);
-    Serial.println(CANMsg.data[6]);
-    Serial.println(CANMsg.data[7]);
-  }
+    if (CANMsg.can_id == 0x168) {
+      Serial.print("voltage: "); //id of where the message came from
+      Serial.println(((CANMsg.data[2] & 3) << 8 )+(CANMsg.data[3]));
+      if ((((CANMsg.data[2] & 3) << 8 )+(CANMsg.data[3])) < 420) {
+        safetyLimitReached = true;
+      }
+      else {
+        safetyLimitReached = false;
+      }
+    }
+   }
 }
 void loop() {
   int rpm = (int)((float)(analogRead(A1)*0.2492668622f)); // read value from potentiometer (0->255)
   sendCANMsg(rpm);
+  logCANMessages();
 }
